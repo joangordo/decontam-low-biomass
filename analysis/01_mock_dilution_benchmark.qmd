@@ -1,0 +1,388 @@
+---
+title: "Contaminant removal in low-biomass 16S data"
+subtitle: "Benchmarking decontam and simple filters against a mock-community ground truth"
+author: "Joan Gordó Guardia"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show code"
+    embed-resources: true
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+knitr:
+  opts_chunk:
+    fig.align: center
+    dev: png
+    dpi: 150
+---
+
+```{r setup}
+library(decontam)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+
+root <- normalizePath("..")   # Quarto runs chunks from analysis/
+for (f in list.files(file.path(root, "R"), full.names = TRUE)) source(f)
+
+theme_set(theme_minimal(base_size = 12))
+pal <- c(Expected = "#2C7FB8", Contaminant = "#BDBDBD")
+
+d <- load_dataset(file.path(root, "data"))
+counts  <- d$counts
+samples <- d$samples
+tax     <- d$taxonomy
+
+is_neg   <- samples$is_neg
+expected <- setNames(tax$expected, tax$asv_id)
+
+# Evaluation universe: ASVs observed in at least one dilution sample.
+# ASVs seen only in the blank cannot contaminate the samples being cleaned.
+in_mock     <- colSums(counts[!is_neg, ]) > 0
+mock_counts <- counts[!is_neg, in_mock]
+mock_exp    <- expected[in_mock]
+```
+
+## Why this matters
+
+In samples with very little bacterial DNA (biopsies, swabs, blood, ascitic
+fluid) the reagents and the lab environment contribute DNA of their own. The
+less real signal there is, the larger the share of reads that come from
+contamination, and the easier it is to "discover" a microbiome that was never
+there.
+
+This project grew out of my own experience analysing low-biomass 16S data
+during a research internship. No data, code or documents from that work are
+used here. Typical cleaning workflows with the
+[decontam](https://benjjneb.github.io/decontam/) package are rarely evaluated,
+because on real samples there is no way to know which taxa are truly
+contaminants. Here such a workflow is built from scratch and **evaluated** on
+a public dataset where the answer is known.
+
+## Data
+
+Karstens et al. (2019, *mSystems*) sequenced a commercial mock community
+(ZymoBIOMICS) in a series of eight three-fold dilutions plus one extraction
+blank. Any read that does not belong to the mock community is, by definition,
+an error or a contaminant. That gives a ground truth to score every method
+against.
+
+```{r data-table}
+samples |>
+  transmute(
+    Sample = sample_id,
+    Description = description,
+    `DNA conc. (ng/µL)` = dna_conc,
+    Reads = format(total_reads, big.mark = ","),
+    `% contaminant reads` = round(
+      100 * rowSums(counts[, !expected]) / rowSums(counts), 1)
+  ) |>
+  kable(align = "llrrr")
+```
+
+The dataset has `r ncol(counts)` ASVs, of which `r sum(expected)` belong to
+the mock community; `r sum(in_mock)` ASVs appear in at least one dilution and
+form the evaluation set.
+
+```{r fig-contam-share, fig.height=3.8, fig.width=7}
+#| fig-cap: "Share of reads per sample that belong to the mock community (blue) or are contaminants (grey). Contamination grows as input biomass falls."
+comp <- tibble(
+  sample_id = rownames(mock_counts),
+  Expected = rowSums(mock_counts[, mock_exp]),
+  Contaminant = rowSums(mock_counts[, !mock_exp])
+) |>
+  left_join(samples, by = "sample_id") |>
+  pivot_longer(c(Expected, Contaminant), names_to = "origin",
+               values_to = "reads") |>
+  group_by(sample_id) |>
+  mutate(share = reads / sum(reads)) |>
+  ungroup() |>
+  mutate(label = factor(paste0(sample_id, "\n", sub("MC_", "", description)),
+                        levels = unique(paste0(samples$sample_id, "\n",
+                                               sub("MC_", "", samples$description)))),
+         origin = factor(origin, levels = c("Contaminant", "Expected")))
+
+ggplot(comp, aes(label, share, fill = origin)) +
+  geom_col(width = 0.75) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = pal) +
+  labs(x = NULL, y = "Share of reads", fill = NULL) +
+  theme(legend.position = "top")
+```
+
+## Step 1. Low-read samples
+
+A common rule drops samples with fewer than 1,000 reads
+(low-biomass tissue and swabs), or fewer reads than the median of the negative
+controls (very-low-biomass fluids).
+
+```{r low-reads}
+low_fixed  <- flag_low_read_samples(counts, is_neg, "fixed", 1000)
+low_median <- flag_low_read_samples(counts, is_neg, "neg_median")
+```
+
+The fixed rule removes nothing: the smallest sample has
+`r format(min(samples$total_reads), big.mark = ",")` reads. Note that read
+depth alone would not have warned us: the most diluted sample is
+`r round(100 * sum(counts["D8", !expected]) / sum(counts["D8", ]))`%
+contaminant while still having tens of thousands of reads. With a single
+blank of `r format(samples$total_reads[is_neg], big.mark = ",")` reads, the
+"median of the controls" rule would discard
+`r sum(low_median)` of the `r sum(!is_neg)` dilutions
+(`r paste(names(low_median)[low_median], collapse = ", ")`), which shows that
+it only makes sense with several controls and genuinely shallow samples.
+
+## Step 2. Methods compared
+
+```{r run-methods}
+flag_from <- function(res) setNames(res$contaminant, res$asv_id)
+
+methods <- list(
+  "Abundance filter (>1% in >=1 sample)" =
+    flag_low_abundance(counts, is_neg, min_rel = 0.01, min_samples = 1),
+  "Abundance filter (>0.2% in >=3 samples)" =
+    flag_low_abundance(counts, is_neg, min_rel = 0.002, min_samples = 3),
+  "Present in negative control" =
+    flag_in_negative(counts, is_neg),
+  "Control-dominant" =
+    flag_control_dominant(counts, is_neg),
+  "decontam frequency (t = 0.1)" =
+    flag_from(run_decontam(counts, samples$dna_conc, is_neg, "frequency", 0.1)),
+  "decontam frequency (t = 0.5)" =
+    flag_from(run_decontam(counts, samples$dna_conc, is_neg, "frequency", 0.5)),
+  "decontam prevalence (t = 0.1)" =
+    flag_from(run_decontam(counts, samples$dna_conc, is_neg, "prevalence", 0.1)),
+  "decontam prevalence (t = 0.5)" =
+    flag_from(run_decontam(counts, samples$dna_conc, is_neg, "prevalence", 0.5))
+)
+methods <- lapply(methods, function(f) f[in_mock])
+
+low_bio <- c("D6", "D7", "D8")   # the three most diluted samples
+
+results <- bind_rows(lapply(names(methods), function(m) {
+  cm <- classification_metrics(methods[[m]], mock_exp)
+  rl <- read_level_metrics(mock_counts, methods[[m]], mock_exp)
+  tibble(
+    Method = m,
+    `Contaminant ASVs removed` = cm$tp,
+    `Mock ASVs removed` = cm$fp,
+    `ASV sensitivity` = cm$sensitivity,
+    `Contaminant reads removed, D6–D8 (%)` =
+      mean(rl$pct_contam_reads_removed[rl$sample_id %in% low_bio]),
+    `Contaminant reads left, D8 (%)` =
+      rl$pct_contam_after[rl$sample_id == "D8"],
+    `Max. mock reads lost (%)` = max(rl$pct_mock_reads_lost)
+  )
+}))
+
+results |>
+  kable(digits = c(0, 0, 0, 3, 1, 1, 1),
+        align = "lrrrrrr")
+```
+
+Every method is scored two ways, because they tell different stories:
+
+* **ASV level**: how many of the contaminant ASVs were removed, and whether
+  any genuine mock ASV was removed by mistake.
+* **Read level**: how much of the contaminant *signal* disappears from the
+  low-biomass samples, and how much genuine signal is lost.
+
+### What the table shows
+
+**Removing everything seen in the blank is harmful.** It is the only method
+that deletes genuine taxa
+(`r results[["Mock ASVs removed"]][results$Method == "Present in negative control"]`
+mock ASVs, up to
+`r round(results[["Max. mock reads lost (%)"]][results$Method == "Present in negative control"])`%
+of the true reads in a sample). Mock DNA ends up in the blank through
+cross-contamination during processing, so the blank contains real taxa too.
+
+**decontam's default threshold is conservative.** At `threshold = 0.1` the
+frequency method removes only
+`r round(results[[5]][results$Method == "decontam frequency (t = 0.1)"])`% of
+contaminant reads in the most diluted samples; at 0.5 this rises to
+`r round(results[[5]][results$Method == "decontam frequency (t = 0.5)"])`%,
+still without touching a single mock ASV. Both values are used in practice,
+often without being reported; the choice matters more than it seems.
+
+**With one blank, the prevalence method has almost nothing to work with.** A
+single negative control means each ASV is either present or absent in it, so
+the method collapses into a softer version of "present in the blank". Its
+performance here says more about the study design than about the method.
+
+**The abundance filter looks best, but this dataset flatters it.** All mock
+taxa are abundant by construction, so a >1% filter cannot hurt them. In real
+samples, rare but genuine taxa would be removed. Treat that row as an upper
+bound, not as a recommendation.
+
+**Nothing cleans the most diluted sample.** Even the most effective method
+leaves
+`r round(min(results[["Contaminant reads left, D8 (%)"]]))`% of D8's reads as
+contaminants.
+
+## Step 3. Why the frequency method misses so much
+
+The frequency method models how each ASV's relative abundance changes with
+input DNA concentration: contaminants are added in roughly constant amounts,
+so their *share* should fall as real DNA increases.
+
+```{r freq-scores}
+freq <- run_decontam(counts, samples$dna_conc, is_neg, "frequency", 0.1)
+freq <- freq[match(names(mock_exp), freq$asv_id), ]
+auc <- score_auc(freq$score, mock_exp)
+
+unscored_contam <- !freq$scored & !mock_exp
+unscored_share <- rowSums(mock_counts[low_bio, unscored_contam]) /
+  rowSums(mock_counts[low_bio, !mock_exp])
+```
+
+Two separate problems appear:
+
+1. **The score itself works.** Among the `r sum(freq$scored)` ASVs it can
+   score, it separates contaminants from mock taxa almost perfectly
+   (AUC = `r sprintf("%.3f", auc)`). The issue is where the cut-off is put.
+2. **Most contaminant ASVs cannot be scored at all.** An ASV needs to appear
+   in at least two samples to fit the model;
+   `r sum(!freq$scored)` of `r length(freq$scored)` ASVs appear in only one.
+   Those unscored contaminants alone account for
+   `r round(100 * min(unscored_share))`% to `r round(100 * max(unscored_share))`%
+   of the contaminant reads in D6–D8, and no threshold can remove them.
+
+```{r fig-threshold, fig.height=4, fig.width=7}
+#| fig-cap: "Frequency method across thresholds. ASV-level sensitivity is computed over scorable ASVs (solid) and over all contaminant ASVs (dashed). Read-level removal is averaged over D6–D8. No mock ASV is removed at any threshold shown."
+thresholds <- seq(0.05, 0.6, by = 0.05)
+sweep <- bind_rows(lapply(thresholds, function(t) {
+  flag <- setNames(freq$scored & freq$score < t, freq$asv_id)
+  cm <- classification_metrics(flag, mock_exp)
+  rl <- read_level_metrics(mock_counts, flag, mock_exp)
+  tibble(
+    threshold = t,
+    `ASV sensitivity (scored ASVs)` =
+      sum(flag & !mock_exp) / sum(freq$scored & !mock_exp),
+    `ASV sensitivity (all ASVs)` = cm$sensitivity,
+    `Contaminant reads removed (D6–D8)` =
+      mean(rl$pct_contam_reads_removed[rl$sample_id %in% low_bio]) / 100,
+    mock_removed = cm$fp
+  )
+}))
+stopifnot(all(sweep$mock_removed == 0))
+
+sweep |>
+  select(-mock_removed) |>
+  pivot_longer(-threshold) |>
+  ggplot(aes(threshold, value, colour = name, linetype = name)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 1.6) +
+  geom_vline(xintercept = 0.1, colour = "grey50", linetype = "dotted") +
+  annotate("text", x = 0.105, y = 0.98, label = "decontam default",
+           hjust = 0, size = 3.3, colour = "grey40") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  scale_colour_manual(values = c("#2C7FB8", "#2C7FB8", "#D95F0E")) +
+  scale_linetype_manual(values = c("dashed", "solid", "solid")) +
+  labs(x = "decontam threshold", y = NULL, colour = NULL, linetype = NULL) +
+  theme(legend.position = "bottom", legend.direction = "vertical")
+```
+
+```{r fig-freq-examples, fig.height=3.6, fig.width=8}
+#| fig-cap: "Relative abundance against DNA concentration for one mock ASV and the two most abundant scorable contaminants. Red: decontam's contaminant model (frequency inversely proportional to DNA concentration). Dashed: non-contaminant model (constant frequency). Only these two models are shown; extra fits drawn over them can mislead."
+top_contam <- names(sort(colSums(mock_counts[, !mock_exp & freq$scored]),
+                         decreasing = TRUE))[1:2]
+show_asvs <- c(names(mock_exp)[mock_exp][1], top_contam)
+
+# Normalise on the full table *before* subsetting (otherwise frequencies
+# would be relative to these three ASVs only), and label each panel with
+# the ASV's true origin.
+ex <- relative_abundance(mock_counts)[, show_asvs]
+colnames(ex) <- paste0(show_asvs, ifelse(mock_exp[show_asvs],
+                                         " (mock)", " (contaminant)"))
+
+plot_frequency(ex, colnames(ex), conc = samples$dna_conc[!is_neg],
+               normalize = FALSE) +
+  labs(x = "DNA concentration (NanoDrop, ng/µL)")
+```
+
+## Effect on the data
+
+```{r fig-before-after, fig.height=4.6, fig.width=8}
+#| fig-cap: "Contaminant share per sample before and after cleaning."
+show <- c("Raw data" = NA,
+          "Present in negative control" = "Present in negative control",
+          "decontam frequency (t = 0.1)" = "decontam frequency (t = 0.1)",
+          "decontam frequency (t = 0.5)" = "decontam frequency (t = 0.5)")
+
+ba <- bind_rows(lapply(names(show), function(lbl) {
+  flag <- if (is.na(show[[lbl]])) setNames(rep(FALSE, length(mock_exp)),
+                                           names(mock_exp))
+          else methods[[show[[lbl]]]]
+  read_level_metrics(mock_counts, flag, mock_exp) |>
+    mutate(method = lbl)
+})) |>
+  mutate(method = factor(method, levels = names(show)),
+         sample_id = factor(sample_id, levels = rownames(mock_counts)))
+
+ggplot(ba, aes(sample_id, pct_contam_after / 100, colour = method,
+               group = method)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 1.8) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_colour_manual(values = c("black", "#D95F0E", "#9ECAE1", "#2C7FB8")) +
+  labs(x = "Dilution (left = most biomass)", y = "Contaminant share of reads",
+       colour = NULL) +
+  theme(legend.position = "bottom")
+```
+
+## Limitations
+
+* **One dataset, one blank.** The prevalence method and any combination that
+  uses it cannot be judged fairly with a single negative control.
+* **Nine true ASVs.** ASV-level specificity rests on very few genuine taxa, so
+  "no mock ASV removed" is encouraging but not a precise estimate.
+* **A mock community is easier than a real sample.** Its true taxa are all
+  abundant, which favours abundance-based filters.
+* **DNA quantification.** Concentrations were measured with NanoDrop, which is
+  imprecise at low concentrations, exactly where the frequency method needs
+  the most information. Fluorometric (Qubit/PicoGreen) or qPCR
+  quantification would be a better input.
+* **"Contaminant" here means "not in the mock".** That bundles reagent
+  contamination, cross-talk between samples and sequencing errors together.
+
+## Practical takeaways (preliminary)
+
+1. Do not remove everything found in the negative controls.
+2. Choose decontam's threshold deliberately and report it; 0.1 is a cautious
+   default, not a property of the data.
+3. Plan for several negative controls per batch if you want to use the
+   prevalence method at all.
+4. In very-low-biomass samples, assume a sizeable share of the remaining reads
+   is still contamination, and say so when reporting results.
+
+## Next
+
+[Part 2](02_simulation_study.html) uses simulation to vary what this dataset
+cannot: the number of negative controls, the precision of DNA quantification
+and cross-contamination of the blanks. [Part 3](03_decision_guide.html) turns
+both parts into a decision guide and an end-to-end workflow.
+
+## Reference
+
+Karstens L, Asquith M, Davin S, et al. (2019). Controlling for contaminants
+in low-biomass 16S rRNA gene sequencing experiments. *mSystems* 4(4):
+e00290-19. <https://doi.org/10.1128/mSystems.00290-19>
+
+Davis NM, Proctor DM, Holmes SP, Relman DA, Callahan BJ (2018). Simple
+statistical identification and removal of contaminant sequences in
+marker-gene and metagenomics data. *Microbiome* 6:226.
+<https://doi.org/10.1186/s40168-018-0605-2>
+
+```{r session}
+#| code-fold: false
+#| echo: false
+cat("R", R.version$major, ".", R.version$minor, " | decontam ",
+    as.character(packageVersion("decontam")), sep = "")
+```

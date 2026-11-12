@@ -1,0 +1,318 @@
+---
+title: "When does decontam work?"
+subtitle: "A simulation study of negative controls, DNA quantification and cross-contamination"
+author: "Joan Gordó Guardia"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show code"
+    embed-resources: true
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+knitr:
+  opts_chunk:
+    fig.align: center
+    dev: png
+    dpi: 150
+---
+
+```{r setup}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+
+root <- normalizePath("..")   # Quarto runs chunks from analysis/
+for (f in list.files(file.path(root, "R"), full.names = TRUE)) source(f)
+theme_set(theme_minimal(base_size = 12))
+
+sim_file <- file.path(root, "analysis", "results", "simulation_results.rds")
+if (!file.exists(sim_file)) {
+  stop("Run `Rscript analysis/run_simulation.R` from the project root first.")
+}
+sim <- readRDS(sim_file)
+res <- sim$results |>
+  mutate(
+    label = ifelse(is.na(threshold), method, paste0(method, " (t = ", threshold, ")")),
+    quant = factor(ifelse(conc_noise == 0.1, "Precise quantification",
+                          "Imprecise quantification"),
+                   levels = c("Precise quantification", "Imprecise quantification")),
+    biomass = factor(paste0("Biomass ratio ", biomass_ratio),
+                     levels = paste0("Biomass ratio ", c(100, 10, 1))),
+    leakage = factor(ifelse(leak == 0, "Clean blanks (no leakage)",
+                            "Realistic blanks (0.5% leakage)"),
+                     levels = c("Clean blanks (no leakage)",
+                                "Realistic blanks (0.5% leakage)"))
+  )
+
+# Mean and 95% interval over simulated studies
+summ <- function(df, ...) {
+  df |>
+    group_by(...) |>
+    summarise(across(c(contam_reads_removed, true_reads_lost, true_taxa_lost,
+                       sensitivity),
+                     list(mean = mean,
+                          lo = ~ mean(.x) - 1.96 * sd(.x) / sqrt(n()),
+                          hi = ~ mean(.x) + 1.96 * sd(.x) / sqrt(n()))),
+              n = n(), .groups = "drop")
+}
+
+# Blank composition in the real data, used to calibrate leakage
+real <- load_dataset(file.path(root, "data"))
+blank_mock_pct <- 100 * sum(real$counts["Blank", real$taxonomy$expected]) /
+  sum(real$counts["Blank", ])
+```
+
+## Questions the mock community could not answer
+
+[Part 1](01_mock_dilution_benchmark.html) scored decontam against a mock
+community with known composition. That dataset has three limitations that
+matter for study design:
+
+1. **One negative control.** The prevalence method could not be judged.
+2. **Nine abundant genuine taxa, present in every sample.** Real clinical
+   samples have many rare taxa that vary between patients, which is exactly
+   where false removals happen.
+3. **One quantification method.** The frequency method depends on how well
+   DNA concentration is measured, and that cannot be varied in a fixed
+   dataset.
+
+Simulation lets us control all three and ask: *for a given design, which
+method and threshold remove the most contamination without removing real
+biology?*
+
+## Simulation design
+
+Each simulated study has 40 true samples plus negative controls. The
+generative model (`R/simulate.R`) follows the mechanism decontam is built on:
+
+* **Genuine community.** 150 taxa with skewed abundances. Each patient
+  carries each taxon with a taxon-specific probability (30–100%), and
+  abundances vary between patients.
+* **Reagent contamination.** 100 contaminant taxa added in roughly the same
+  absolute amount to every tube, each reaching a given tube only sometimes.
+* **Biomass.** Sample DNA varies log-normally across samples; its median, as
+  a multiple of the contaminant DNA, sets how contaminated the study is.
+* **DNA quantification.** Measured concentration = true total DNA ×
+  log-normal error (SD on the log scale 0.1 = precise, 0.5 = imprecise).
+* **Cross-contamination.** Each blank receives a fraction of its reads from
+  two neighbouring samples. In the real blank of Part 1,
+  `r sprintf("%.1f", blank_mock_pct)`% of reads were mock-community reads, so
+  a 0.5% leakage is, if anything, conservative.
+* **Sequencing.** About 30,000 reads per sample, half that for blanks.
+
+```{r design-table}
+tibble(
+  Factor = c("Negative controls", "Biomass ratio (sample DNA / contaminant DNA)",
+             "DNA quantification error (log-SD)", "Leakage into blanks"),
+  Levels = c("1, 2, 4, 8", "100 (~1% contamination), 10 (~6%), 1 (~40%)",
+             "0.1 (precise), 0.5 (imprecise)", "0 (idealised), 0.5% (realistic)")
+) |> kable()
+```
+
+That gives `r nrow(sim$design)` scenarios × `r sim$n_reps` simulated studies.
+Every study is scored with decontam's frequency, prevalence, combined and
+"either" methods at thresholds 0.1, 0.25 and 0.5, plus the two simple filters
+from Part 1. Performance is measured on taxa seen in at least one true
+sample, as in Part 1:
+
+* **Contamination removed**: share of contaminant reads in true samples that
+  are removed.
+* **Real signal lost**: share of genuine reads removed, and number of
+  genuine taxa removed (out of 150).
+
+```{r fig-sanity, fig.height=3.6, fig.width=8}
+#| fig-cap: "Sanity check: in one simulated study per biomass level, the contaminant share of each sample falls as its measured DNA concentration rises, the same pattern seen in the real dilution series."
+demo <- bind_rows(lapply(c(100, 10, 1), function(r) {
+  s <- simulate_study(n_neg = 4, biomass_ratio = r, leak = 0.005, seed = 99)
+  ts <- !s$samples$is_neg
+  tibble(
+    biomass = paste0("Biomass ratio ", r),
+    conc = s$samples$dna_conc[ts],
+    contam = rowSums(s$counts[ts, !s$taxonomy$expected]) / rowSums(s$counts[ts, ])
+  )
+})) |>
+  mutate(biomass = factor(biomass, levels = paste0("Biomass ratio ", c(100, 10, 1))))
+
+ggplot(demo, aes(conc, contam)) +
+  geom_point(alpha = 0.7, colour = "#2C7FB8") +
+  facet_wrap(~biomass, scales = "free_x") +
+  scale_x_log10() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Measured DNA concentration (arbitrary units, log scale)",
+       y = "Contaminant share of reads")
+```
+
+## Result 1. The frequency method is only as good as the DNA measurement
+
+The frequency method does not use the negative controls at all, so what
+drives it is the quality of the concentration it is given.
+
+```{r fig-quant, fig.height=4.2, fig.width=8}
+#| fig-cap: "Frequency method, realistic blanks, all numbers of controls pooled. Points are means over simulated studies with 95% intervals."
+fq <- res |>
+  filter(method == "frequency", leak > 0) |>
+  summ(quant, biomass, label)
+
+ggplot(fq, aes(biomass, contam_reads_removed_mean / 100, colour = label,
+               group = label)) +
+  geom_line(linewidth = 0.8) +
+  geom_pointrange(aes(ymin = contam_reads_removed_lo / 100,
+                      ymax = contam_reads_removed_hi / 100), size = 0.3) +
+  facet_wrap(~quant) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  scale_colour_manual(values = c("#9ECAE1", "#4292C6", "#08519C")) +
+  labs(x = NULL, y = "Contamination removed", colour = NULL) +
+  theme(legend.position = "bottom")
+
+fq_low <- fq |> filter(biomass == "Biomass ratio 1", label == "frequency (t = 0.1)")
+```
+
+At the default threshold and in the most contaminated studies, the method
+removes `r round(fq_low$contam_reads_removed_mean[fq_low$quant == "Precise quantification"])`%
+of the contamination when DNA is measured precisely, but only
+`r round(fq_low$contam_reads_removed_mean[fq_low$quant == "Imprecise quantification"])`%
+when the measurement is noisy. The samples that need cleaning most are the
+ones with the least DNA, which is also where imprecise instruments are at
+their worst. **Better quantification is worth more than any choice of
+method or threshold.**
+
+## Result 2. The threshold is a trade-off that the mock community hid
+
+```{r fig-tradeoff, fig.height=4.6, fig.width=8}
+#| fig-cap: "Operating characteristics under realistic blanks and precise quantification, averaged over all biomass levels and numbers of controls. Each point is a method-threshold pair; up and to the left is better."
+to <- res |>
+  filter(leak > 0, conc_noise == 0.1) |>
+  summ(method, threshold, label)
+
+ggplot(to, aes(true_taxa_lost_mean, contam_reads_removed_mean / 100,
+               colour = method)) +
+  geom_path(data = filter(to, !is.na(threshold)), aes(group = method),
+            linewidth = 0.6, alpha = 0.6) +
+  geom_point(aes(shape = ifelse(is.na(threshold), "no threshold",
+                                 paste0("t = ", threshold))), size = 2.8) +
+  scale_shape_manual(values = c("t = 0.1" = 16, "t = 0.25" = 17,
+                                "t = 0.5" = 15, "no threshold" = 4)) +
+  scale_x_continuous(trans = "pseudo_log", breaks = c(0, 1, 2, 5, 10, 20, 50)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1.05)) +
+  scale_colour_brewer(palette = "Dark2") +
+  labs(x = "Genuine taxa removed (out of 150, pseudo-log scale)",
+       y = "Contamination removed", colour = NULL, shape = NULL) +
+  theme(legend.position = "right")
+
+f50 <- to |> filter(method == "frequency", threshold == 0.5)
+f25 <- to |> filter(method == "frequency", threshold == 0.25)
+f10 <- to |> filter(method == "frequency", threshold == 0.1)
+```
+
+In Part 1, raising the frequency threshold to 0.5 cost nothing, because every
+genuine taxon was abundant and present in every sample. With realistic
+communities it costs about `r round(f50$true_taxa_lost_mean)` genuine taxa
+per study (`r sprintf("%.1f", f50$true_reads_lost_mean)`% of genuine reads):
+rare taxa seen in a few samples can show a negative relationship with DNA
+concentration by chance. A threshold of 0.25 is a good compromise here:
+`r round(f25$contam_reads_removed_mean)`% of the contamination removed for
+`r sprintf("%.1f", f25$true_taxa_lost_mean)` genuine taxa lost, against
+`r round(f10$contam_reads_removed_mean)`% and
+`r sprintf("%.1f", f10$true_taxa_lost_mean)` at the default 0.1.
+
+## Result 3. Prevalence needs many clean controls, and controls are rarely clean
+
+```{r fig-prev, fig.height=4.8, fig.width=8.5}
+#| fig-cap: "Prevalence and combined methods (t = 0.25) by number of negative controls, precise quantification, all biomass levels pooled."
+pv <- res |>
+  filter(method %in% c("prevalence", "combined"), threshold == 0.25,
+         conc_noise == 0.1) |>
+  summ(leakage, n_neg, method) |>
+  select(leakage, n_neg, method,
+         `Contamination removed` = contam_reads_removed_mean,
+         `Genuine reads lost` = true_reads_lost_mean) |>
+  pivot_longer(c(`Contamination removed`, `Genuine reads lost`))
+
+ggplot(pv, aes(n_neg, value / 100, colour = method, linetype = name)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.8) +
+  facet_wrap(~leakage) +
+  scale_x_continuous(breaks = c(1, 2, 4, 8)) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_colour_manual(values = c(combined = "#1B9E77", prevalence = "#7570B3")) +
+  labs(x = "Number of negative controls", y = NULL, colour = NULL,
+       linetype = NULL) +
+  theme(legend.position = "bottom")
+
+prev_leak <- res |> filter(method == "prevalence", threshold == 0.25,
+                           leak > 0, n_neg == 8, conc_noise == 0.1)
+prev_clean <- res |> filter(method == "prevalence", threshold == 0.25,
+                            leak == 0, n_neg == 8, conc_noise == 0.1)
+```
+
+With clean blanks, adding controls steadily improves the prevalence method
+and costs nothing. With realistic blanks the picture reverses: abundant
+genuine taxa leak into the controls, look "more prevalent in blanks than in
+patients" when they are not carried by every patient, and get removed. With
+8 controls and leakage, prevalence at t = 0.25 removed
+`r sprintf("%.0f", mean(prev_leak$true_reads_lost))`% of genuine reads,
+against `r sprintf("%.1f", mean(prev_clean$true_reads_lost))`% with clean
+blanks. More controls do not fix this, because each extra control is another
+chance to catch leaked DNA.
+
+The practical consequence is that negative controls should be placed away
+from high-biomass samples on the plate, and that prevalence-based results
+should be checked for abundant taxa being removed.
+
+## Result 4. The simple filters
+
+```{r simple-filters}
+sf <- res |>
+  filter(leak > 0, conc_noise == 0.1,
+         method %in% c("in negative control", "abundance >1%")) |>
+  summ(method)
+
+sf |>
+  transmute(Method = method,
+            `Contamination removed (%)` = contam_reads_removed_mean,
+            `Genuine reads lost (%)` = true_reads_lost_mean,
+            `Genuine taxa lost (of 150)` = true_taxa_lost_mean) |>
+  kable(digits = 1)
+```
+
+Removing everything seen in a blank looks thorough but throws away most of
+the real signal once blanks contain any leaked DNA, which confirms the Part 1
+result on a much larger scale. The abundance filter keeps the dominant genuine
+taxa but discards dozens of rare ones, and leaves most contamination in the
+very-low-biomass studies, where contaminants are themselves abundant.
+
+## Summary
+
+```{r summary-table}
+res |>
+  filter(leak > 0) |>
+  summ(quant, label) |>
+  transmute(Quantification = quant, Method = label,
+            `Contam. removed (%)` = contam_reads_removed_mean,
+            `Genuine reads lost (%)` = true_reads_lost_mean,
+            `Genuine taxa lost` = true_taxa_lost_mean) |>
+  arrange(Quantification, desc(`Contam. removed (%)`)) |>
+  kable(digits = 1)
+```
+
+## Limitations of the simulation
+
+* **It encodes decontam's own assumptions** (constant contaminant DNA per
+  tube), so it is a best case for the frequency method. Contamination that
+  scales with sample handling would weaken it.
+* **No taxon is both genuine and a contaminant.** In practice some genera
+  (e.g. skin or environmental bacteria) can be both.
+* **One batch.** decontam can score batches separately; batch effects in
+  contamination were not simulated.
+* **Leakage structure is an assumption.** Two neighbours per blank and a
+  fixed rate; the qualitative conclusion (leakage harms prevalence) is
+  robust, the exact numbers are not.
+
+The results feed the recommendations in
+[Part 3](03_decision_guide.html).

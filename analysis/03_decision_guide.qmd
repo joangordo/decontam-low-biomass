@@ -1,0 +1,283 @@
+---
+title: "A practical guide to contaminant removal"
+subtitle: "Recommendations derived from Parts 1 and 2, and an end-to-end example"
+author: "Joan Gordó Guardia"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show code"
+    embed-resources: true
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+knitr:
+  opts_chunk:
+    fig.align: center
+    dev: png
+    dpi: 150
+---
+
+```{r setup}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+
+root <- normalizePath("..")   # Quarto runs chunks from analysis/
+for (f in list.files(file.path(root, "R"), full.names = TRUE)) source(f)
+theme_set(theme_minimal(base_size = 12))
+
+sim <- readRDS(file.path(root, "analysis", "results", "simulation_results.rds"))
+```
+
+## How the recommendations are chosen
+
+A cleaning method is only useful if it removes contamination **without
+removing real biology**. So the rule is explicit and applied to the
+simulation results from [Part 2](02_simulation_study.html), using only the
+scenarios with realistic (leaky) negative controls:
+
+1. Discard every method/threshold that, on average, removes more than **1% of
+   genuine reads** or more than **2 genuine taxa** (out of 150).
+2. Among the rest, pick the one that removes the most contamination.
+
+The thresholds are a judgement call, written down so they can be argued
+with. They reflect a typical clinical priority: losing a real organism is
+worse than leaving some contamination that can be flagged in the report.
+
+```{r rule}
+max_reads_lost <- 1
+max_taxa_lost <- 2
+
+cand <- sim$results |>
+  filter(leak > 0) |>
+  mutate(choice = ifelse(is.na(threshold), method,
+                         paste0(method, " ", threshold))) |>
+  group_by(conc_noise, biomass_ratio, n_neg, choice) |>
+  summarise(removed = mean(contam_reads_removed),
+            reads_lost = mean(true_reads_lost),
+            taxa_lost = mean(true_taxa_lost), .groups = "drop")
+
+best <- cand |>
+  filter(reads_lost <= max_reads_lost, taxa_lost <= max_taxa_lost) |>
+  group_by(conc_noise, biomass_ratio, n_neg) |>
+  slice_max(removed, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+stopifnot(nrow(best) == nrow(distinct(cand, conc_noise, biomass_ratio, n_neg)))
+```
+
+## Recommendation table
+
+Each cell shows the best method and threshold, and the share of
+contamination it removes on average.
+
+```{r rec-table}
+best |>
+  mutate(
+    Quantification = ifelse(conc_noise == 0.1, "Precise", "Imprecise"),
+    Biomass = factor(biomass_ratio, levels = c(100, 10, 1),
+                     labels = c("High (~1% contam.)", "Low (~6%)",
+                                "Very low (~40%)")),
+    cell = sprintf("%s (%.0f%%)", choice, removed),
+    n_neg = paste(n_neg, ifelse(n_neg == 1, "control", "controls"))
+  ) |>
+  select(Quantification, Biomass, n_neg, cell) |>
+  pivot_wider(names_from = n_neg, values_from = cell) |>
+  arrange(desc(Quantification), Biomass) |>
+  kable(align = "llllll")
+
+share_freq <- mean(grepl("^frequency", best$choice))
+low_imprecise <- best |> filter(conc_noise == 0.5, biomass_ratio == 1)
+
+# Where another method wins, how far behind is the best frequency option?
+passing <- cand |>
+  filter(reads_lost <= max_reads_lost, taxa_lost <= max_taxa_lost)
+gap <- best |>
+  filter(!grepl("^frequency", choice)) |>
+  left_join(passing |>
+              filter(grepl("^frequency", choice)) |>
+              group_by(conc_noise, biomass_ratio, n_neg) |>
+              summarise(best_freq = max(removed), .groups = "drop"),
+            by = c("conc_noise", "biomass_ratio", "n_neg")) |>
+  mutate(gap = removed - best_freq)
+n_05_pass <- sum(grepl(" 0.5$", passing$choice))
+```
+
+What the table says:
+
+* **The frequency method is the backbone.** It is the selected method in
+  `r round(100 * share_freq)`% of the designs. Where a method that also uses
+  the negative controls wins, the best frequency option is on average
+  `r sprintf("%.1f", mean(gap$gap))` percentage points behind (at most
+  `r sprintf("%.1f", max(gap$gap))`). Leaked DNA in the controls is what
+  stops those methods from doing better: push their thresholds up and they
+  start removing real taxa.
+* **Thresholds of 0.1–0.25 are the safe range.** A threshold of 0.5 passes
+  the "don't remove real biology" rule in `r n_05_pass` of the
+  `r nrow(passing |> distinct(conc_noise, biomass_ratio, n_neg))` designs.
+* **Very low biomass plus imprecise quantification cannot be fixed in
+  software.** The best option there removes only
+  `r round(min(low_imprecise$removed))`–`r round(max(low_imprecise$removed))`%
+  of the contamination. The fix is upstream: better DNA quantification, more
+  starting material, or reporting the data as exploratory.
+
+## Decision guide
+
+The flowchart condenses the table above for a single sample type.
+
+```{mermaid}
+flowchart TD
+    A["One sample type<br/>with its own negative controls"] --> B{"DNA measured precisely?<br/>(fluorometric or qPCR)"}
+    B -- Yes --> C["decontam frequency<br/>threshold 0.1 to 0.25"]
+    B -- No --> D{"Very low biomass?<br/>(e.g. blood, ascitic fluid)"}
+    D -- No --> E["decontam frequency, threshold 0.1<br/>expect partial cleaning"]
+    D -- Yes --> F["No method cleans reliably:<br/>report residual contamination<br/>and treat results as exploratory"]
+    C --> G["Checks: no abundant taxon removed,<br/>threshold and reads removed reported"]
+    E --> G
+    F --> G
+```
+
+Three rules hold in every scenario:
+
+1. **Do not remove every taxon found in the negative controls.** It removed
+   real taxa in the mock community (Part 1) and most genuine reads in the
+   simulations (Part 2).
+2. **Clean each sample type separately**, against its own controls: contamination is a larger share of
+   blood than of a swab, so the evidence differs.
+3. **Report the decision**, not just the result: method, threshold, number of
+   taxa removed and share of reads removed per sample.
+
+## Worked example: two sample types in one study
+
+A simulated study with swabs (low biomass, precise quantification) and blood
+(very low biomass, imprecise quantification, shallow sequencing), each with
+four negative controls, cleaned with `clean_low_biomass()`. Because it is
+simulated, we can check the result against the truth.
+
+```{r example-data}
+swab <- simulate_study(n_samples = 30, n_neg = 4, biomass_ratio = 10,
+                       conc_noise = 0.1, leak = 0.005, seed = 2018)
+blood <- simulate_study(n_samples = 30, n_neg = 4, biomass_ratio = 1,
+                        conc_noise = 0.5, leak = 0.005,
+                        depth_meanlog = log(6000), depth_sdlog = 0.8,
+                        neg_depth_factor = 0.2, seed = 2019)
+prefix <- function(s, p) {
+  rownames(s$counts) <- s$samples$sample_id <- paste0(p, "_", s$samples$sample_id)
+  s
+}
+swab <- prefix(swab, "SWAB")
+blood <- prefix(blood, "BLOOD")
+
+counts <- rbind(swab$counts, blood$counts)
+samples <- rbind(cbind(swab$samples, sample_type = "swab"),
+                 cbind(blood$samples, sample_type = "blood"))
+expected <- setNames(swab$taxonomy$expected, swab$taxonomy$asv_id)
+```
+
+The settings follow the recommendation table: frequency method with
+threshold 0.1, the fixed 1,000-read rule for swabs and the "median of the
+controls" rule for blood.
+
+```{r example-clean}
+cleaned <- clean_low_biomass(
+  counts, samples, group = "sample_type",
+  method = "frequency",
+  threshold = c(swab = 0.1, blood = 0.1),
+  low_read_rule = c(swab = "fixed", blood = "neg_median"),
+  min_reads = 1000
+)
+
+cleaned$summary |>
+  select(-notes) |>
+  rename(`Sample type` = group, Method = method, Threshold = threshold,
+         `Read-depth rule` = read_rule, `Samples in` = samples_in,
+         `Samples dropped` = samples_dropped, `Neg. controls` = negatives,
+         `Taxa scored` = taxa_scored, `Taxa removed` = taxa_removed,
+         `Median % reads removed` = median_pct_reads_removed) |>
+  mutate(Threshold = format(Threshold, nsmall = 2)) |>
+  kable(digits = 1)
+```
+
+### Checking against the truth
+
+```{r example-truth, fig.height=4, fig.width=8}
+#| fig-cap: "Contaminant share per sample before and after cleaning, by sample type. Every genuine taxon is known because the data are simulated."
+kept_ids <- rownames(cleaned$counts)
+before <- counts[kept_ids, ]
+after <- cleaned$counts
+
+truth <- tibble(
+  sample_id = kept_ids,
+  type = sub("_.*", "", kept_ids),
+  Before = rowSums(before[, !expected]) / rowSums(before),
+  After = rowSums(after[, !expected]) / rowSums(after),
+  genuine_lost = 1 - rowSums(after[, expected]) / rowSums(before[, expected])
+)
+
+truth |>
+  pivot_longer(c(Before, After), names_to = "stage", values_to = "contam") |>
+  mutate(stage = factor(stage, levels = c("Before", "After")),
+         type = factor(type, levels = c("SWAB", "BLOOD"),
+                       labels = c("Swab", "Blood"))) |>
+  ggplot(aes(stage, contam, group = sample_id)) +
+  geom_line(alpha = 0.35, colour = "grey40") +
+  geom_point(aes(colour = stage), size = 1.6) +
+  facet_wrap(~type) +
+  scale_colour_manual(values = c(Before = "#BDBDBD", After = "#2C7FB8"),
+                      guide = "none") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = NULL, y = "Contaminant share of reads")
+
+by_type <- truth |>
+  group_by(type) |>
+  summarise(before = 100 * median(Before), after = 100 * median(After),
+            lost = 100 * max(genuine_lost))
+sw <- by_type[by_type$type == "SWAB", ]
+bl <- by_type[by_type$type == "BLOOD", ]
+```
+
+In swabs, the median contaminant share fell from
+`r sprintf("%.1f", sw$before)`% to `r sprintf("%.1f", sw$after)`%, with at
+most `r sprintf("%.1f", sw$lost)`% of any sample's genuine reads removed. In
+blood the median contaminant share was `r sprintf("%.0f", bl$before)`% before
+cleaning and `r sprintf("%.0f", bl$after)`% after: exactly the situation the
+guide flags as unfixable, and the reason the methods text below says so.
+
+### Methods text, generated from the run
+
+Reporting is part of the method. The paragraph below is written by the code
+from `cleaned$summary`, so it always matches what was actually done:
+
+```{r methods-text}
+#| results: asis
+s <- cleaned$summary
+describe <- function(i) {
+  sprintf(
+    "%s samples (n = %d; %d negative controls) were cleaned with the decontam %s method (threshold %.2f) after excluding %d sample(s) under the %s read-depth rule; %d of %d scored taxa were classified as contaminants, removing a median of %.1f%% of reads per sample.",
+    tools::toTitleCase(s$group[i]), s$samples_in[i], s$negatives[i], s$method[i],
+    s$threshold[i], s$samples_dropped[i], s$read_rule[i], s$taxa_removed[i],
+    s$taxa_scored[i], s$median_pct_reads_removed[i])
+}
+cat("> Contaminant sequences were identified separately for each sample type",
+    "with decontam", as.character(packageVersion("decontam")),
+    "(Davis et al., 2018), using DNA concentration measured before library",
+    "preparation.", paste(vapply(seq_len(nrow(s)), describe, ""), collapse = " "),
+    "Given the low biomass of the blood samples, residual contamination is",
+    "expected and results for this sample type are reported as exploratory.\n")
+```
+
+## Summary: common practice and updated recommendation
+
+| Common practice | Updated recommendation | Evidence |
+|---|---|---|
+| Use decontam prevalence or frequency | Frequency first; prevalence only with clean, well-separated controls | Parts 1 and 2 |
+| Threshold 0.1 or 0.5, often unreported | 0.1–0.25, chosen and reported | Part 2, Result 2 |
+| Remove taxa dominant in controls | Allowed as a check, not as the main filter | Part 1 |
+| NanoDrop concentration as input | Fluorometric or qPCR quantification | Part 2, Result 1 |
+| 1,000 reads / median of controls | Kept, applied per sample type | Part 1 and this example |
+| One sample type at a time | Kept | All parts |

@@ -1,0 +1,12 @@
+.Rproj.user/
+.Rhistory
+.RData
+.Rdata
+.DS_Store
+*_files/
+/.quarto/
+renv/library/
+renv/staging/
+
+**/*.quarto_ipynb
+analysis/results/scenarios/

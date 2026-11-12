@@ -1,0 +1,8 @@
+project:
+  type: default
+  output-dir: docs
+  render:
+    - index.qmd
+    - analysis/01_mock_dilution_benchmark.qmd
+    - analysis/02_simulation_study.qmd
+    - analysis/03_decision_guide.qmd

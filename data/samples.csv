@@ -1,0 +1,11 @@
+"sample_id","description","dna_conc","is_neg","dilution","total_reads"
+"D0","MC_Neat",138.8,FALSE,0,251419
+"D1","MC_1:3",109.2,FALSE,1,172915
+"D2","MC_1:9",105.8,FALSE,2,250861
+"D3","MC_1:27",60.6,FALSE,3,247581
+"D4","MC_1:81",34.9,FALSE,4,216341
+"D5","MC_1:243",22.6,FALSE,5,136081
+"D6","MC_1:729",20,FALSE,6,128053
+"D7","MC_1:2187",11.4,FALSE,7,41071
+"D8","MC_1:6561",13.8,FALSE,8,40927
+"Blank","Urine Extraction Blank",10.5,TRUE,NA,189779

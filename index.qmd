@@ -1,0 +1,22 @@
+---
+title: "Contaminant removal in low-biomass 16S data"
+subtitle: "decontam benchmark, simulation study and practical guide"
+author: "Joan Gordó Guardia"
+format:
+  html:
+    embed-resources: true
+    theme: cosmo
+---
+
+Low-biomass samples (biopsies, swabs, blood, ascitic fluid) carry so little
+bacterial DNA that contamination from reagents and the lab can make up a
+large share of the sequencing reads. This project evaluates how well
+contaminant-removal methods work, using data where the right answer is known.
+
+| Part | Question | |
+|---|---|---|
+| **1. Benchmark** | How do decontam and simple filters perform on a real mock-community dilution series? | [Read](analysis/01_mock_dilution_benchmark.html) |
+| **2. Simulation** | How do the number of negative controls, DNA quantification and cross-contamination change the answer? | [Read](analysis/02_simulation_study.html) |
+| **3. Guide** | Which method and threshold should I use, and how do I report it? | [Read](analysis/03_decision_guide.html) |
+
+Code, data and tests: [github.com/joangordo/decontam-low-biomass](https://github.com/joangordo/decontam-low-biomass)
