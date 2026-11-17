@@ -8,8 +8,9 @@ Processed from the supplementary material of:
 > https://doi.org/10.1128/mSystems.00290-19
 
 Original files: <https://github.com/lakarstens/ControllingContaminants16S>.
-Raw reads: SRA accession SRP155048. Published under CC BY 4.0; the files here
-are a format conversion (phyloseq `.RData` to CSV) made by
+Raw reads: SRA accession SRP155048. The article is open access under CC BY 4.0;
+the source repository above has no explicit licence, so the data are used here
+for research and teaching, with full citation. The files here are a format conversion (phyloseq `.RData` to CSV) made by
 `data-raw/extract_karstens.R`, with no other changes.
 
 | File | Content |
