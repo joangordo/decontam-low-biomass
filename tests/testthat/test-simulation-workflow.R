@@ -120,3 +120,20 @@ test_that("non-positive DNA concentrations are treated as missing", {
   expect_error(run_decontam(s$counts, rep(0, nrow(s$counts)), s$samples$is_neg,
                             "frequency"), "at least two")
 })
+
+test_that("methods_text describes exactly what clean_low_biomass did", {
+  s <- simulate_study(n_samples = 15, n_neg = 3, n_true = 30, n_contam = 20, seed = 5)
+  samples <- cbind(s$samples, sample_type = "swab")
+  res <- clean_low_biomass(s$counts, samples, method = "frequency", threshold = 0.1,
+                           min_reads = 0)
+  txt <- methods_text(res)
+  sm <- res$summary
+  expect_type(txt, "character")
+  expect_length(txt, 1)
+  expect_match(txt, "decontam frequency method (threshold 0.10)", fixed = TRUE)
+  expect_match(txt, sprintf("%d of %d scored taxa", sm$taxa_removed, sm$taxa_scored),
+               fixed = TRUE)
+  expect_match(txt, "3 negative controls", fixed = TRUE)
+  expect_match(txt, "DNA concentration", fixed = TRUE)
+  expect_false(grepl("presence in negative controls", txt))
+})

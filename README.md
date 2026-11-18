@@ -30,7 +30,7 @@ removes more than a fifth: the bottleneck is in the lab, not in the software.*
 
 ## Key findings
 
-**On real data (mock-community dilution series)**
+**On real data (mock-community dilution series)** · [Part 1 report →](https://joangordo.github.io/decontam-low-biomass/analysis/01_mock_dilution_benchmark.html)
 
 - Removing every taxon seen in the negative control deleted 3 of the 9
   genuine taxa and up to 34% of the true reads in a sample.
@@ -40,7 +40,7 @@ removes more than a fifth: the bottleneck is in the lab, not in the software.*
   from genuine taxa almost perfectly (AUC 0.99), but 675 of 946 ASVs appear
   in a single sample and cannot be scored.
 
-**In simulation (realistic, slightly leaky negative controls)**
+**In simulation (realistic, slightly leaky negative controls)** · [Part 2 report →](https://joangordo.github.io/decontam-low-biomass/analysis/02_simulation_study.html)
 
 - **DNA quantification matters more than the method.** In very-low-biomass
   studies the frequency method (threshold 0.1) removed 75% of the
@@ -60,11 +60,12 @@ in 18 of the 24 simulated designs with realistic controls; a threshold of 0.5
 never met the "don't remove real biology" rule. When biomass is very low and
 quantification imprecise, no method removed more than about a fifth of the
 contamination: that has to be fixed in the lab, not in software.
+[Part 3: decision guide and worked example →](https://joangordo.github.io/decontam-low-biomass/analysis/03_decision_guide.html)
 
 The simulation follows decontam's own model of contamination (the same amount
 of contaminant DNA in every tube), so it is a best case for the frequency
-method. Contamination that grows with sample handling would weaken it; Part 2
-lists this and the other limitations.
+method. Contamination that grows with sample handling would weaken it;
+[Part 2](https://joangordo.github.io/decontam-low-biomass/analysis/02_simulation_study.html#limitations-of-the-simulation) lists this and the other limitations.
 
 ## Background
 
@@ -92,7 +93,7 @@ here: everything is built on public data and the published literature.
 | Threshold treated as a parameter and swept | The default (0.1) is a choice, and its effect is large |
 | Each sample type cleaned against its own controls | Contamination is a larger share of blood than of a swab |
 | Scored against a known truth, on real and simulated data | On real samples there is no way to check a cleaning method |
-| `clean_low_biomass()` returns every decision and drafts the methods text | Cleaning should be reported, not just applied |
+| `clean_low_biomass()` returns every decision; `methods_text()` drafts the methods paragraph from it | Cleaning should be reported, not just applied |
 
 ## Repository structure
 
@@ -103,7 +104,7 @@ here: everything is built on public data and the published literature.
 │   ├── decontam_methods.R   # decontam wrapper
 │   ├── evaluate.R           # metrics against the ground truth
 │   ├── simulate.R           # simulation model and per-study scoring
-│   └── workflow.R           # clean_low_biomass(): end-to-end, per sample type
+│   └── workflow.R           # clean_low_biomass() and methods_text()
 ├── analysis/
 │   ├── 01_mock_dilution_benchmark.qmd
 │   ├── 02_simulation_study.qmd
@@ -144,20 +145,40 @@ come out differently (50 of 960 under R 4.3), which moves the headline
 figures by up to three percentage points and changes none of the
 conclusions.
 
-## Using the workflow on your own data
+## Using the workflow
+
+This runs as is on the data in the repository:
 
 ```r
 for (f in list.files("R", full.names = TRUE)) source(f)
 
+d <- load_dataset("data")              # the mock-community data in this repository
+d$samples$sample_type <- "mock"        # one sample type here; real studies have several
+
 res <- clean_low_biomass(
-  counts, samples,                       # samples x taxa matrix + metadata
-  group = "sample_type",                 # each type cleaned against its own controls
-  method = "frequency", threshold = 0.1,
-  low_read_rule = c(blood = "neg_median")
+  d$counts, d$samples,
+  group = "sample_type",               # each type is cleaned against its own controls
+  method = "frequency", threshold = 0.1
 )
-res$summary                              # what was done, per sample type
-res$counts                               # cleaned counts (true samples only)
+res$summary                            # what was done, per sample type
+res$counts                             # cleaned counts (true samples only)
+cat(methods_text(res))                 # draft methods paragraph
 ```
+
+The last line prints:
+
+> Contaminant sequences were identified separately for each sample type with decontam 1.32.0
+> (Davis et al., 2018), using DNA concentration measured before library preparation. Mock
+> samples (n = 9; 1 negative control) were cleaned with the decontam frequency method
+> (threshold 0.10) after excluding 0 samples under the fixed (cut-off 1000) read-depth rule;
+> 34 of 271 scored taxa were classified as contaminants, removing a median of 2.3% of reads
+> per sample.
+
+With your own data, `samples` needs `sample_id`, `is_neg`, `dna_conc` and a sample-type
+column, with each negative control assigned to the type it belongs to. Each type can have
+its own read-depth rule, for example `low_read_rule = c(blood = "neg_median")`.
+[Part 3](https://joangordo.github.io/decontam-low-biomass/analysis/03_decision_guide.html) runs the workflow on a simulated study with two
+sample types.
 
 ## Scope
 

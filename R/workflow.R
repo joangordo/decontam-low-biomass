@@ -21,7 +21,8 @@
 #'   "neg_median"); unnamed groups use "fixed".
 #' @param min_reads Cut-off for the "fixed" rule.
 #' @return A list with `counts` (cleaned true samples), `taxa` (per group and
-#'   taxon: score and decision), `dropped_samples` and `summary`.
+#'   taxon: score and decision), `dropped_samples` and `summary`. Pass it to
+#'   `methods_text()` for a draft methods paragraph.
 clean_low_biomass <- function(counts, samples, group = "sample_type",
                               method = "frequency", threshold = 0.1,
                               low_read_rule = character(0),
@@ -94,4 +95,35 @@ clean_low_biomass <- function(counts, samples, group = "sample_type",
        taxa = bind(out_taxa),
        dropped_samples = bind(out_drop),
        summary = bind(out_sum))
+}
+
+
+#' Draft the methods paragraph for a cleaning run.
+#'
+#' Written from `res$summary`, so it always matches what was actually done.
+#' It describes the procedure, not why it was chosen: edit it before use.
+#'
+#' @param res Output of `clean_low_biomass()`.
+#' @return One character string.
+methods_text <- function(res) {
+  s <- res$summary
+  plural <- function(n, word) paste(n, if (n == 1) word else paste0(word, "s"))
+  describe <- function(i) {
+    sprintf(paste("%s samples (n = %d; %s) were cleaned with the decontam %s method",
+                  "(threshold %.2f) after excluding %s under the %s read-depth rule;",
+                  "%d of %d scored taxa were classified as contaminants, removing a",
+                  "median of %.1f%% of reads per sample."),
+            tools::toTitleCase(s$group[i]), s$samples_in[i],
+            plural(s$negatives[i], "negative control"), s$method[i], s$threshold[i],
+            plural(s$samples_dropped[i], "sample"), s$read_rule[i],
+            s$taxa_removed[i], s$taxa_scored[i], s$median_pct_reads_removed[i])
+  }
+  evidence <- c(
+    if (any(s$method != "prevalence")) "DNA concentration measured before library preparation",
+    if (any(s$method != "frequency")) "presence in negative controls"
+  )
+  paste0("Contaminant sequences were identified separately for each sample type with ",
+         "decontam ", utils::packageVersion("decontam"), " (Davis et al., 2018), using ",
+         paste(evidence, collapse = " and "), ". ",
+         paste(vapply(seq_len(nrow(s)), describe, ""), collapse = " "))
 }
