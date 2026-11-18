@@ -40,8 +40,9 @@ flag_in_negative <- function(counts, is_neg) {
 #' Flag taxa that dominate the controls: higher prevalence, higher maximum
 #' and higher mean relative abundance in controls than in true samples.
 #'
-#' A working version of the "control-dominant" filter that is often described
-#' but rarely implemented.
+#' A middle ground between ignoring the controls and removing everything seen
+#' in them: a taxon is flagged only if the controls dominate it on all three
+#' counts.
 flag_control_dominant <- function(counts, is_neg) {
   stopifnot(length(is_neg) == nrow(counts), any(is_neg), any(!is_neg))
   rel <- relative_abundance(counts)

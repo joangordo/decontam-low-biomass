@@ -1,5 +1,8 @@
 # Install the packages used in this project.
-# Afterwards, run renv::init() once to pin exact versions in renv.lock.
+#
+# Recommended: run renv::restore() from the project root instead. It installs
+# the exact versions recorded in renv.lock, so results match the reports.
+# This script is the fallback: it installs the latest versions available.
 
 cran <- c("dplyr", "tidyr", "ggplot2", "knitr", "rmarkdown", "scales",
           "testthat", "renv", "BiocManager")

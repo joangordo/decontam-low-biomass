@@ -67,3 +67,56 @@ test_that("clean_low_biomass handles groups, controls and fallbacks", {
   expect_equal(nrow(res$counts), 12 - 1 + 12)
   expect_true(all(res$counts >= 0))
 })
+
+test_that("every method gives decontam's own calls", {
+  # Regression test: for "either" and "both" decontam returns p = NA and
+  # decides internally, which an earlier version of run_decontam() missed.
+  s <- simulate_study(n_samples = 15, n_neg = 4, n_true = 30, n_contam = 20,
+                      leak = 0.005, seed = 21)
+  for (m in c("frequency", "prevalence", "combined", "minimum",
+              "either", "both")) {
+    for (t in c(0.1, 0.5)) {
+      ours <- run_decontam(s$counts, s$samples$dna_conc, s$samples$is_neg,
+                           m, t)
+      ref <- suppressMessages(suppressWarnings(decontam::isContaminant(
+        s$counts, conc = s$samples$dna_conc, neg = s$samples$is_neg,
+        method = m, threshold = t)))
+      expect_identical(ours$contaminant, unname(ref$contaminant),
+                       label = paste(m, t))
+    }
+  }
+  either <- run_decontam(s$counts, s$samples$dna_conc, s$samples$is_neg,
+                         "either", 0.5)
+  both <- run_decontam(s$counts, s$samples$dna_conc, s$samples$is_neg,
+                       "both", 0.5)
+  expect_gt(sum(either$contaminant), 0)
+  expect_true(all(either$contaminant[both$contaminant]))   # both implies either
+  expect_true(all(either$scored >= both$scored))
+})
+
+test_that("clean_low_biomass removes taxa with the either method", {
+  s <- simulate_study(n_samples = 15, n_neg = 4, n_true = 30, n_contam = 20,
+                      leak = 0.005, seed = 21)
+  samples <- cbind(s$samples, sample_type = "swab")
+  res <- clean_low_biomass(s$counts, samples, method = "either",
+                           threshold = 0.5, min_reads = 0)
+  expect_gt(res$summary$taxa_removed, 0)
+})
+
+test_that("non-positive DNA concentrations are treated as missing", {
+  s <- simulate_study(n_samples = 15, n_neg = 3, n_true = 30, n_contam = 20,
+                      seed = 8)
+  conc <- s$samples$dna_conc
+  conc[s$samples$is_neg] <- 0                       # blanks below detection
+  conc[which(!s$samples$is_neg)[1]] <- 0            # one sample too
+  expect_message(
+    res <- run_decontam(s$counts, conc, s$samples$is_neg, "combined", 0.1),
+    "zero or below")
+  keep <- !s$samples$is_neg & conc > 0
+  ref <- run_decontam(s$counts[keep, ], conc[keep], NULL, "frequency", 0.1)
+  expect_equal(res$score_freq, ref$score)           # same frequency evidence
+  prev <- run_decontam(s$counts, NULL, s$samples$is_neg, "prevalence", 0.1)
+  expect_equal(res$score_prev, prev$score)          # blanks still used
+  expect_error(run_decontam(s$counts, rep(0, nrow(s$counts)), s$samples$is_neg,
+                            "frequency"), "at least two")
+})

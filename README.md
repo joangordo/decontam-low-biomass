@@ -1,5 +1,7 @@
 # Contaminant removal in low-biomass 16S data
 
+[![tests](https://github.com/joangordo/decontam-low-biomass/actions/workflows/tests.yaml/badge.svg)](https://github.com/joangordo/decontam-low-biomass/actions/workflows/tests.yaml)
+
 **How well do common contaminant-removal methods work when we know the right
 answer?** This project evaluates the R package
 [decontam](https://benjjneb.github.io/decontam/) and several simple filters in
@@ -7,7 +9,7 @@ two settings where every read can be labelled as genuine or contaminant: a
 public mock-community dilution series and a simulation study. It ends with a
 practical guide and a reusable cleaning workflow.
 
-📄 **[Read the reports](https://joangordo.github.io/decontam-low-biomass/)**
+**[Read the reports →](https://joangordo.github.io/decontam-low-biomass/)**
 
 | Part | Question |
 |---|---|
@@ -30,21 +32,28 @@ practical guide and a reusable cleaning workflow.
 **In simulation (realistic, slightly leaky negative controls)**
 
 - **DNA quantification matters more than the method.** In very-low-biomass
-  studies the frequency method removed 76% of the contamination with precise
-  quantification and 8% with imprecise quantification.
+  studies the frequency method (threshold 0.1) removed 75% of the
+  contamination with precise quantification and 7% with imprecise
+  quantification.
 - **High thresholds remove real biology.** With realistic communities, a
   threshold of 0.5 removed about 25 rare genuine taxa per study, something
   the mock community could not show.
 - **Prevalence-based methods are vulnerable to cross-contamination.** With 8
-  leaky controls, the prevalence method removed 32% of genuine reads; more
-  controls made it worse, not better.
+  leaky controls, the prevalence method at threshold 0.25 removed 32% of
+  genuine reads (28% with imprecise quantification); more controls made it
+  worse, not better.
 
 **Recommendation:** decontam's frequency method with a threshold of 0.1–0.25,
 applied per sample type and reported explicitly. It was the best safe choice
-in 75% of the simulated designs; a threshold of 0.5 never met the "don't
-remove real biology" rule. When biomass is very low and quantification
-imprecise, no method removed more than about a fifth of the contamination:
-that has to be fixed in the lab, not in software.
+in 18 of the 24 simulated designs with realistic controls; a threshold of 0.5
+never met the "don't remove real biology" rule. When biomass is very low and
+quantification imprecise, no method removed more than about a fifth of the
+contamination: that has to be fixed in the lab, not in software.
+
+The simulation follows decontam's own model of contamination (the same amount
+of contaminant DNA in every tube), so it is a best case for the frequency
+method. Contamination that grows with sample handling would weaken it; Part 2
+lists this and the other limitations.
 
 ## Background
 
@@ -56,23 +65,23 @@ evaluated, because on real samples there is no ground truth. This repository
 builds such a workflow from scratch and evaluates it on open data where the
 truth is known.
 
-The question comes from my own experience analysing low-biomass 16S data
-during a research internship. No data, code or documents from that work are
-used here: everything is built on public data and the published literature.
+This is an independent project, not affiliated with or endorsed by any
+institution. The question comes from my own experience analysing low-biomass
+16S data, but no data, code or documents from any previous work are used
+here: everything is built on public data and the published literature.
 
 ### Design choices
 
-| Common shortcut | This repository |
+| Choice | Why |
 |---|---|
-| Assume metadata and count-table rows are in the same order | IDs are matched and validated (`load_dataset()`) |
-| Abundance pre-filter computed over samples *and* controls | Computed over true samples only |
-| "Control-dominant" filter described but not implemented | Implemented and tested (`flag_control_dominant()`) |
-| Low-read rules applied by hand | `flag_low_read_samples()` with both rules |
-| One fixed threshold, often unreported | Threshold treated as a parameter and swept |
-| Extra fits drawn over decontam's models | Only decontam's two models are shown |
-| No evaluation | Scored against a mock-community ground truth and in simulation |
-| Prevalence or frequency, either way | Frequency first, threshold 0.1–0.25 (Part 3) |
-| Manual reporting | `clean_low_biomass()` returns every decision and drafts the methods text |
+| Sample IDs matched and validated (`load_dataset()`) | If metadata and counts are silently out of order, every result is wrong |
+| Abundance pre-filter computed over true samples only | Computed over controls too, it keeps taxa that are abundant only in the blanks |
+| Controls used without removing everything seen in them (`flag_control_dominant()`) | Removing every taxon found in a blank deletes real taxa (Part 1) |
+| Read-depth rules as functions (`flag_low_read_samples()`) | The same rule is applied every time and recorded |
+| Threshold treated as a parameter and swept | The default (0.1) is a choice, and its effect is large |
+| Each sample type cleaned against its own controls | Contamination is a larger share of blood than of a swab |
+| Scored against a known truth, on real and simulated data | On real samples there is no way to check a cleaning method |
+| `clean_low_biomass()` returns every decision and drafts the methods text | Cleaning should be reported, not just applied |
 
 ## Repository structure
 
@@ -99,21 +108,28 @@ used here: everything is built on public data and the published literature.
 
 ## Reproduce
 
-Requires R (≥ 4.3) and [Quarto](https://quarto.org/).
+Requires R (≥ 4.3) and [Quarto](https://quarto.org/). Open the project in R
+from its root folder (renv activates itself), then:
 
 ```r
-source("install.R")                      # CRAN + Bioconductor packages
+renv::restore()                          # exact package versions from renv.lock
 testthat::test_dir("tests/testthat")     # run the tests
 ```
 
+Without renv, `source("install.R")` installs the latest versions instead.
+
 ```bash
-Rscript analysis/run_simulation.R        # optional: ~6 min, results are cached
+Rscript analysis/run_simulation.R        # optional: ~7 min, results are cached
 quarto render                            # writes the site to docs/
 ```
 
 The processed data and simulation results are included, so the reports
 render without re-running anything. The simulation is fully seeded and
-resumable.
+resumable. The cached results were produced with R 4.6.1 and decontam 1.32.0,
+as pinned in `renv.lock`. Under another R version a few simulated studies
+come out differently (50 of 960 under R 4.3), which moves the headline
+figures by up to three percentage points and changes none of the
+conclusions.
 
 ## Using the workflow on your own data
 
@@ -130,7 +146,16 @@ res$summary                              # what was done, per sample type
 res$counts                               # cleaned counts (true samples only)
 ```
 
-## Data and citation
+## Scope
+
+This benchmark covers decontam and simple filters, the tools most often used
+in practice. Newer methods that model where contamination comes from and how
+it leaks between wells, such as SCRuB (Austin et al., 2023), are not
+evaluated here; adding them is a natural next step. For the laboratory side
+(controls, quantification and reporting), see the consensus guidelines of
+Fierer et al. (2025).
+
+## Data and references
 
 Data from Karstens L. et al. (2019), *mSystems* 4(4): e00290-19,
 [doi:10.1128/mSystems.00290-19](https://doi.org/10.1128/mSystems.00290-19)
@@ -139,5 +164,11 @@ source files and their terms.
 
 decontam: Davis N.M. et al. (2018), *Microbiome* 6: 226,
 [doi:10.1186/s40168-018-0605-2](https://doi.org/10.1186/s40168-018-0605-2).
+
+SCRuB: Austin G.I. et al. (2023), *Nature Biotechnology* 41: 1820–1828,
+[doi:10.1038/s41587-023-01696-w](https://doi.org/10.1038/s41587-023-01696-w).
+
+Guidelines: Fierer N. et al. (2025), *Nature Microbiology* 10: 1570–1580,
+[doi:10.1038/s41564-025-02035-2](https://doi.org/10.1038/s41564-025-02035-2).
 
 Code released under the MIT licence.

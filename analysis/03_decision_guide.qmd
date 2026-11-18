@@ -271,13 +271,13 @@ cat("> Contaminant sequences were identified separately for each sample type",
     "expected and results for this sample type are reported as exploratory.\n")
 ```
 
-## Summary: common practice and updated recommendation
+## Summary
 
-| Common practice | Updated recommendation | Evidence |
+| Question | Recommendation | Evidence |
 |---|---|---|
-| Use decontam prevalence or frequency | Frequency first; prevalence only with clean, well-separated controls | Parts 1 and 2 |
-| Threshold 0.1 or 0.5, often unreported | 0.1–0.25, chosen and reported | Part 2, Result 2 |
-| Remove taxa dominant in controls | Allowed as a check, not as the main filter | Part 1 |
-| NanoDrop concentration as input | Fluorometric or qPCR quantification | Part 2, Result 1 |
-| 1,000 reads / median of controls | Kept, applied per sample type | Part 1 and this example |
-| One sample type at a time | Kept | All parts |
+| Which decontam method? | Frequency first; prevalence only with clean, well-separated controls | Parts 1 and 2 |
+| Which threshold? | 0.1–0.25, chosen in advance and reported | Part 2, Result 2 |
+| Remove what appears in the controls? | Never everything; a control-dominant rule works as a check, not as the main filter | Part 1 |
+| How to measure input DNA? | Fluorometric or qPCR quantification, precise at low concentrations | Part 2, Result 1 |
+| Which samples to drop? | A read-depth rule per sample type (fixed cut-off or median of the controls), reported | Part 1 and this example |
+| Pool sample types? | No: clean each one against its own controls | All parts |

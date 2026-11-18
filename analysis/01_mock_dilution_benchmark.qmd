@@ -57,9 +57,10 @@ less real signal there is, the larger the share of reads that come from
 contamination, and the easier it is to "discover" a microbiome that was never
 there.
 
-This project grew out of my own experience analysing low-biomass 16S data
-during a research internship. No data, code or documents from that work are
-used here. Typical cleaning workflows with the
+This is an independent project, not affiliated with or endorsed by any
+institution. The question comes from my own experience analysing
+low-biomass 16S data, but no data, code or documents from any previous work
+are used here. Typical cleaning workflows with the
 [decontam](https://benjjneb.github.io/decontam/) package are rarely evaluated,
 because on real samples there is no way to know which taxa are truly
 contaminants. Here such a workflow is built from scratch and **evaluated** on

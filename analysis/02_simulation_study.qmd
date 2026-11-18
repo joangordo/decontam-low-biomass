@@ -313,6 +313,12 @@ res |>
 * **Leakage structure is an assumption.** Two neighbours per blank and a
   fixed rate; the qualitative conclusion (leakage harms prevalence) is
   robust, the exact numbers are not.
+* **Only decontam and simple filters are compared.** Methods that model
+  contamination sources and well-to-well leakage explicitly, such as SCRuB
+  (Austin et al., 2023, *Nature Biotechnology* 41: 1820–1828,
+  <https://doi.org/10.1038/s41587-023-01696-w>), are designed for exactly
+  the leaky-control scenarios where prevalence fails here, and are the
+  natural next comparison.
 
 The results feed the recommendations in
 [Part 3](03_decision_guide.html).

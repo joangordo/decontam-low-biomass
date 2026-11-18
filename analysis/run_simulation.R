@@ -6,7 +6,7 @@
 # The run is resumable: finished scenarios are skipped.
 #
 # Run from the project root:   Rscript analysis/run_simulation.R
-# (about 15 minutes on one core)
+# (about 7 minutes on one core)
 # -----------------------------------------------------------------------------
 
 for (f in list.files("R", full.names = TRUE)) source(f)

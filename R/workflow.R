@@ -78,7 +78,9 @@ clean_low_biomass <- function(counts, samples, group = "sample_type",
       negatives = sum(sg$is_neg),
       taxa_scored = sum(res$scored),
       taxa_removed = sum(flagged),
-      median_pct_reads_removed = stats::median(100 * (before - after) / before),
+      median_pct_reads_removed = if (any(before > 0)) {
+        stats::median(100 * (before - after)[before > 0] / before[before > 0])
+      } else NA_real_,
       notes = trimws(note)
     )
   }
