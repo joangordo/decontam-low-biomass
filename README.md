@@ -11,6 +11,17 @@ practical guide and a reusable cleaning workflow.
 
 **[Read the reports →](https://joangordo.github.io/decontam-low-biomass/)**
 
+<a href="https://joangordo.github.io/decontam-low-biomass/analysis/02_simulation_study.html">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="figures/readme-tradeoff-dark.png">
+    <img src="figures/readme-tradeoff-light.png" alt="Two scatter plots of contaminant reads removed against real taxa removed. With precise DNA quantification, decontam's frequency method at thresholds 0.1 and 0.25 removes 75 to 87 percent of contamination while losing at most 2 real taxa; the prevalence method and simple filters either remove little contamination or remove real taxa. With imprecise quantification, every safe option removes less than a fifth of the contamination.">
+  </picture>
+</a>
+
+*With precise DNA quantification, decontam's frequency method at a threshold of 0.1–0.25 removes
+most of the contamination and almost no real biology. With imprecise quantification no safe option
+removes more than a fifth: the bottleneck is in the lab, not in the software.*
+
 | Part | Question |
 |---|---|
 | [1. Benchmark](https://joangordo.github.io/decontam-low-biomass/analysis/01_mock_dilution_benchmark.html) | How do decontam and simple filters perform on a real mock-community dilution series with known composition? |
@@ -98,6 +109,7 @@ here: everything is built on public data and the published literature.
 │   ├── 02_simulation_study.qmd
 │   ├── 03_decision_guide.qmd
 │   ├── run_simulation.R     # regenerates results/simulation_results.rds
+│   ├── readme_figure.R      # the summary figure above (figures/)
 │   └── results/
 ├── data/                    # processed CSVs + data README (source and licence)
 ├── data-raw/                # builds data/ from the original files
@@ -121,6 +133,7 @@ Without renv, `source("install.R")` installs the latest versions instead.
 ```bash
 Rscript analysis/run_simulation.R        # optional: ~7 min, results are cached
 quarto render                            # writes the site to docs/
+Rscript analysis/readme_figure.R         # the summary figure in this README
 ```
 
 The processed data and simulation results are included, so the reports
